@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/goproxy/goproxy"
+	"github.com/Coopermasaaki/goproxy"
 )
 
 var (
