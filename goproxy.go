@@ -323,12 +323,15 @@ func (g *Goproxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	}
 	defer os.RemoveAll(tempDir)
 
+	var expiration = 1 * time.Minute
 	if strings.HasPrefix(name, "sumdb/") {
-		g.serveSUMDB(rw, req, name, tempDir)
+		g.serveSUMDB(rw, req, name, tempDir, expiration)
 		return
 	}
 
-	g.serveFetch(rw, req, name, tempDir)
+	g.serveFetch(rw, req, name, tempDir, expiration)
+
+	StartCleanupTask("C:\\goworkspace\\pkg\\mod\\cache\\download", 2*time.Minute)
 }
 
 // serveFetch serves fetch requests.
@@ -337,6 +340,7 @@ func (g *Goproxy) serveFetch(
 	req *http.Request,
 	name string,
 	tempDir string,
+	expiration time.Duration,
 ) {
 	f, err := newFetch(g, name, tempDir)
 	if err != nil {
@@ -380,7 +384,7 @@ func (g *Goproxy) serveFetch(
 
 	if isDownload {
 		g.serveCache(rw, req, f.name, f.contentType, 604800, func() {
-			g.serveFetchDownload(rw, req, f)
+			g.serveFetchDownload(rw, req, f, expiration)
 		})
 		return
 	}
@@ -407,7 +411,7 @@ func (g *Goproxy) serveFetch(
 	}
 	defer content.Close()
 
-	if err := g.putCache(req.Context(), f.name, content); err != nil {
+	if err := g.putCache(req.Context(), f.name, content, expiration); err != nil {
 		g.logErrorf("failed to cache module file: %s: %v", f.name, err)
 		responseInternalServerError(rw, req)
 		return
@@ -429,6 +433,7 @@ func (g *Goproxy) serveFetchDownload(
 	rw http.ResponseWriter,
 	req *http.Request,
 	f *fetch,
+	expiration time.Duration,
 ) {
 	fr, err := f.do(req.Context())
 	if err != nil {
@@ -455,6 +460,7 @@ func (g *Goproxy) serveFetchDownload(
 			req.Context(),
 			fmt.Sprint(nameWithoutExt, cache.nameExt),
 			cache.localFile,
+			expiration,
 		); err != nil {
 			g.logErrorf(
 				"failed to cache module file: %s: %v",
@@ -483,6 +489,7 @@ func (g *Goproxy) serveSUMDB(
 	req *http.Request,
 	name string,
 	tempDir string,
+	expiration time.Duration,
 ) {
 	sumdbURL, err := parseRawURL(strings.TrimPrefix(name, "sumdb/"))
 	if err != nil {
@@ -561,6 +568,7 @@ func (g *Goproxy) serveSUMDB(
 		req.Context(),
 		name,
 		tempFile.Name(),
+		expiration,
 	); err != nil {
 		g.logErrorf("failed to cache module file: %s: %v", name, err)
 		responseInternalServerError(rw, req)
@@ -625,6 +633,7 @@ func (g *Goproxy) putCache(
 	ctx context.Context,
 	name string,
 	content io.ReadSeeker,
+	expiration time.Duration,
 ) error {
 	if g.Cacher == nil {
 		return nil
@@ -640,19 +649,19 @@ func (g *Goproxy) putCache(
 		}
 	}
 
-	return g.Cacher.Put(ctx, name, content)
+	return g.Cacher.Put(ctx, name, content, expiration)
 }
 
 // putCacheFile puts a cache to the g.Cacher for the name with the targeted
 // local file.
-func (g *Goproxy) putCacheFile(ctx context.Context, name, file string) error {
+func (g *Goproxy) putCacheFile(ctx context.Context, name, file string, expiration time.Duration) error {
 	f, err := os.Open(file)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
 
-	return g.putCache(ctx, name, f)
+	return g.putCache(ctx, name, f, expiration)
 }
 
 // logErrorf formats according to the format and logs the v as an error.

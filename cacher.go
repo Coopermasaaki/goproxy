@@ -7,6 +7,7 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 // Cacher defines a set of intuitive methods used to cache module files for the
@@ -31,8 +32,11 @@ type Cacher interface {
 	//     directly without further processing.
 	Get(ctx context.Context, name string) (io.ReadCloser, error)
 
-	// Put puts a cache for the name with the content.
-	Put(ctx context.Context, name string, content io.ReadSeeker) error
+	// Put puts a cache for the name with the content and sets it to expire after the given duration.
+	Put(ctx context.Context, name string, content io.ReadSeeker, expiration time.Duration) error
+
+	// Cleanup removes all expired cache files.
+	Cleanup() error
 }
 
 // DirCacher implements the [Cacher] using a directory on the local disk. If the
@@ -44,7 +48,18 @@ func (dc DirCacher) Get(
 	ctx context.Context,
 	name string,
 ) (io.ReadCloser, error) {
-	f, err := os.Open(filepath.Join(string(dc), filepath.FromSlash(name)))
+	filePath := filepath.Join(string(dc), filepath.FromSlash(name))
+
+	// Check if the file has expired
+	expired, err := isCacheExpired(filePath)
+	if err != nil {
+		return nil, err
+	}
+	if expired {
+		return nil, os.ErrNotExist
+	}
+
+	f, err := os.Open(filePath)
 	if err != nil {
 		return nil, err
 	}
@@ -65,6 +80,7 @@ func (dc DirCacher) Put(
 	ctx context.Context,
 	name string,
 	content io.ReadSeeker,
+	expiration time.Duration,
 ) error {
 	file := filepath.Join(string(dc), filepath.FromSlash(name))
 
@@ -90,5 +106,67 @@ func (dc DirCacher) Put(
 		return err
 	}
 
-	return os.Rename(f.Name(), file)
+	if err := os.Rename(f.Name(), file); err != nil {
+		return err
+	}
+
+	// Set the expiration time
+	if err := setCacheExpiration(file, expiration); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// Cleanup implements the [Cacher].
+func (dc DirCacher) Cleanup() error {
+	files, err := ioutil.ReadDir(string(dc))
+	if err != nil {
+		return err
+	}
+
+	for _, file := range files {
+		filePath := filepath.Join(string(dc), file.Name())
+		expired, err := isCacheExpired(filePath)
+		if err != nil {
+			return err
+		}
+		if expired {
+			if err := os.Remove(filePath); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+// isCacheExpired checks if the cache file at the specified path has expired.
+func isCacheExpired(filePath string) (bool, error) {
+	info, err := os.Stat(filePath)
+	if err != nil {
+		return false, err
+	}
+
+	expirationTime := info.ModTime().Add(24 * time.Hour)
+	return time.Now().After(expirationTime), nil
+}
+
+// setCacheExpiration sets the expiration time for the cache file at the specified path.
+func setCacheExpiration(filePath string, expiration time.Duration) error {
+	expirationTime := time.Now().Add(expiration)
+	return os.Chtimes(filePath, time.Now(), expirationTime)
+}
+
+// StartCleanupTask starts a periodic cleanup task for the cache directory.
+// It cleans up expired cache files every duration interval.
+func StartCleanupTask(dirCacher DirCacher, interval time.Duration) {
+	go func() {
+		for {
+			time.Sleep(interval)
+			if err := dirCacher.Cleanup(); err != nil {
+				fmt.Printf("Error cleaning up expired cache files: %v\n", err)
+			}
+		}
+	}()
 }
