@@ -148,7 +148,7 @@ func isCacheExpired(filePath string) (bool, error) {
 		return false, err
 	}
 
-	expirationTime := info.ModTime().Add(24 * time.Hour)
+	expirationTime := info.ModTime()
 	return time.Now().After(expirationTime), nil
 }
 
