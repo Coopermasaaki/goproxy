@@ -132,8 +132,18 @@ func (dc DirCacher) Cleanup() error {
 			return err
 		}
 		if expired {
-			if err := os.Remove(filePath); err != nil {
-				return err
+			if file.IsDir() {
+				// If the file is a directory, call the Cleanup() method recursively to clean the directory.
+				subDir := filepath.Join(string(dc), file.Name())
+				subDirCacher := DirCacher(subDir)
+				if err := subDirCacher.Cleanup(); err != nil {
+					return err
+				}
+			} else {
+				// If the file is an ordinary file, delete it directly
+				if err := os.Remove(filePath); err != nil {
+					return err
+				}
 			}
 		}
 	}
